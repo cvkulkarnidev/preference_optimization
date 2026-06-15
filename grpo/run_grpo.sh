@@ -1,0 +1,123 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# -----------------------------
+# Editable paths
+# -----------------------------
+MODEL_PATH="/home/c.kulkarni/hf_models/google/gemma-4-E2B-it"
+TRAIN_JSONL="/path/to/train.jsonl"
+EVAL_JSONL=""   # Keep empty to auto-split train into train/val
+OUTPUT_DIR="./outputs/grpo_genui"
+
+# -----------------------------
+# Dataset / split
+# -----------------------------
+VALIDATION_SPLIT=0.05
+SEED=42
+
+# -----------------------------
+# GRPO generation settings
+# Important: global train batch size should be divisible by NUM_GENERATIONS.
+# global batch = PER_DEVICE_TRAIN_BATCH_SIZE * num_processes * GRADIENT_ACCUMULATION_STEPS
+# -----------------------------
+MAX_PROMPT_LENGTH=1024
+MAX_COMPLETION_LENGTH=512
+NUM_GENERATIONS=4
+TEMPERATURE=0.9
+TOP_P=0.95
+BETA=0.04
+
+# -----------------------------
+# Optimization
+# -----------------------------
+LEARNING_RATE=5e-6
+WEIGHT_DECAY=0.0
+WARMUP_RATIO=0.03
+NUM_TRAIN_EPOCHS=1
+MAX_STEPS=-1
+PER_DEVICE_TRAIN_BATCH_SIZE=1
+PER_DEVICE_EVAL_BATCH_SIZE=1
+GRADIENT_ACCUMULATION_STEPS=8
+GRADIENT_CHECKPOINTING=true
+BF16=true
+FP16=false
+TF32=true
+
+# -----------------------------
+# Logging/checkpoints
+# -----------------------------
+LOGGING_STEPS=5
+EVAL_STEPS=100
+SAVE_STEPS=100
+SAVE_TOTAL_LIMIT=3
+REPORT_TO="tensorboard"
+RUN_NAME="grpo_genui"
+RESUME_FROM_CHECKPOINT=""
+
+# -----------------------------
+# LoRA / QLoRA settings
+# -----------------------------
+USE_LORA=true
+LORA_R=16
+LORA_ALPHA=32
+LORA_DROPOUT=0.05
+LORA_TARGET_MODULES="q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj"
+LORA_MODULES_TO_SAVE=""
+LOAD_IN_4BIT=false
+BNB_4BIT_COMPUTE_DTYPE="bfloat16"
+
+mkdir -p "${OUTPUT_DIR}"
+
+CMD=(
+  accelerate launch grpo/train_grpo.py
+  --model_path "${MODEL_PATH}"
+  --train_jsonl "${TRAIN_JSONL}"
+  --output_dir "${OUTPUT_DIR}"
+  --validation_split "${VALIDATION_SPLIT}"
+  --seed "${SEED}"
+  --max_prompt_length "${MAX_PROMPT_LENGTH}"
+  --max_completion_length "${MAX_COMPLETION_LENGTH}"
+  --num_generations "${NUM_GENERATIONS}"
+  --learning_rate "${LEARNING_RATE}"
+  --weight_decay "${WEIGHT_DECAY}"
+  --warmup_ratio "${WARMUP_RATIO}"
+  --num_train_epochs "${NUM_TRAIN_EPOCHS}"
+  --max_steps "${MAX_STEPS}"
+  --per_device_train_batch_size "${PER_DEVICE_TRAIN_BATCH_SIZE}"
+  --per_device_eval_batch_size "${PER_DEVICE_EVAL_BATCH_SIZE}"
+  --gradient_accumulation_steps "${GRADIENT_ACCUMULATION_STEPS}"
+  --gradient_checkpointing "${GRADIENT_CHECKPOINTING}"
+  --logging_steps "${LOGGING_STEPS}"
+  --eval_steps "${EVAL_STEPS}"
+  --save_steps "${SAVE_STEPS}"
+  --save_total_limit "${SAVE_TOTAL_LIMIT}"
+  --temperature "${TEMPERATURE}"
+  --top_p "${TOP_P}"
+  --beta "${BETA}"
+  --bf16 "${BF16}"
+  --fp16 "${FP16}"
+  --tf32 "${TF32}"
+  --use_lora "${USE_LORA}"
+  --lora_r "${LORA_R}"
+  --lora_alpha "${LORA_ALPHA}"
+  --lora_dropout "${LORA_DROPOUT}"
+  --lora_target_modules "${LORA_TARGET_MODULES}"
+  --load_in_4bit "${LOAD_IN_4BIT}"
+  --bnb_4bit_compute_dtype "${BNB_4BIT_COMPUTE_DTYPE}"
+  --report_to "${REPORT_TO}"
+  --run_name "${RUN_NAME}"
+)
+
+if [[ -n "${EVAL_JSONL}" ]]; then
+  CMD+=(--eval_jsonl "${EVAL_JSONL}")
+fi
+
+if [[ -n "${LORA_MODULES_TO_SAVE}" ]]; then
+  CMD+=(--lora_modules_to_save "${LORA_MODULES_TO_SAVE}")
+fi
+
+if [[ -n "${RESUME_FROM_CHECKPOINT}" ]]; then
+  CMD+=(--resume_from_checkpoint "${RESUME_FROM_CHECKPOINT}")
+fi
+
+"${CMD[@]}"
