@@ -55,6 +55,18 @@ RUN_NAME="grpo_genui"
 RESUME_FROM_CHECKPOINT=""
 
 # -----------------------------
+# Periodic prediction saving during training
+# Set PREDICTION_SAVE_STEPS=0 to disable.
+# Outputs are written to: ${OUTPUT_DIR}/predictions/step_<N>/
+# -----------------------------
+PREDICTION_SAVE_STEPS=100
+PREDICTION_NUM_SAMPLES=16
+PREDICTION_MAX_NEW_TOKENS=512
+PREDICTION_DO_SAMPLE=false
+PREDICTION_TEMPERATURE=0.0
+PREDICTION_TOP_P=1.0
+
+# -----------------------------
 # LoRA / QLoRA settings
 # -----------------------------
 USE_LORA=true
@@ -91,6 +103,12 @@ CMD=(
   --eval_steps "${EVAL_STEPS}"
   --save_steps "${SAVE_STEPS}"
   --save_total_limit "${SAVE_TOTAL_LIMIT}"
+  --prediction_save_steps "${PREDICTION_SAVE_STEPS}"
+  --prediction_num_samples "${PREDICTION_NUM_SAMPLES}"
+  --prediction_max_new_tokens "${PREDICTION_MAX_NEW_TOKENS}"
+  --prediction_do_sample "${PREDICTION_DO_SAMPLE}"
+  --prediction_temperature "${PREDICTION_TEMPERATURE}"
+  --prediction_top_p "${PREDICTION_TOP_P}"
   --temperature "${TEMPERATURE}"
   --top_p "${TOP_P}"
   --beta "${BETA}"
