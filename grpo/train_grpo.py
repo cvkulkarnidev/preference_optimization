@@ -1,20 +1,11 @@
-"""Train a causal LM with GRPO for response_text -> genui_json generation.
-
-Example:
-    accelerate launch grpo/train_grpo.py \
-      --model_path /home/c.kulkarni/hf_models/google/gemma-4-E2B-it \
-      --train_jsonl /path/to/train.jsonl \
-      --output_dir ./outputs/grpo_genui \
-      --use_lora true \
-      --load_in_4bit false
-"""
+"""Train a causal LM with GRPO for response_text -> genui_json generation."""
 
 from __future__ import annotations
 
 import argparse
 import json
 import os
-from dataclasses import asdict, dataclass
+from dataclasses import MISSING, asdict, dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -38,11 +29,9 @@ class ScriptConfig:
     eval_jsonl: Optional[str] = None
     validation_split: float = 0.05
     seed: int = 42
-
     max_prompt_length: int = 1024
     max_completion_length: int = 512
     num_generations: int = 4
-
     learning_rate: float = 5e-6
     weight_decay: float = 0.0
     warmup_ratio: float = 0.03
@@ -56,15 +45,12 @@ class ScriptConfig:
     eval_steps: int = 100
     save_steps: int = 100
     save_total_limit: int = 3
-
     temperature: float = 0.9
     top_p: float = 0.95
     beta: float = 0.04
-
     bf16: bool = True
     fp16: bool = False
     tf32: bool = True
-
     use_lora: bool = True
     lora_r: int = 16
     lora_alpha: int = 32
@@ -73,7 +59,6 @@ class ScriptConfig:
     lora_modules_to_save: Optional[str] = None
     load_in_4bit: bool = False
     bnb_4bit_compute_dtype: str = "bfloat16"
-
     report_to: str = "tensorboard"
     run_name: str = "grpo_genui"
     resume_from_checkpoint: Optional[str] = None
@@ -95,7 +80,11 @@ def parse_args() -> ScriptConfig:
     for field_name, field_def in ScriptConfig.__dataclass_fields__.items():
         default = field_def.default
         arg_name = f"--{field_name}"
-        if isinstance(default, bool):
+        required = default is MISSING
+
+        if required:
+            parser.add_argument(arg_name, required=True)
+        elif isinstance(default, bool):
             parser.add_argument(arg_name, type=str2bool, default=default)
         elif isinstance(default, int):
             parser.add_argument(arg_name, type=int, default=default)
@@ -105,18 +94,11 @@ def parse_args() -> ScriptConfig:
             parser.add_argument(arg_name, default=default)
 
     args = parser.parse_args()
-    missing = [name for name in ("model_path", "train_jsonl", "output_dir") if getattr(args, name) is None]
-    if missing:
-        raise ValueError(f"Missing required arguments: {missing}")
     return ScriptConfig(**vars(args))
 
 
 class RewardLoggingCallback(TrainerCallback):
-    """Logs reward-related metrics that TRL exposes in `logs`.
-
-    TRL already logs loss, grad_norm, reward, reward_std, KL, completion length,
-    etc. This callback keeps a small JSONL history as a backup next to TensorBoard.
-    """
+    """Keep a JSONL backup of trainer logs next to TensorBoard logs."""
 
     def __init__(self, output_dir: str):
         self.path = Path(output_dir) / "reward_logs.jsonl"
@@ -140,8 +122,8 @@ class RewardLoggingCallback(TrainerCallback):
 
 def build_model_and_tokenizer(cfg: ScriptConfig):
     torch_dtype = torch.bfloat16 if cfg.bf16 else (torch.float16 if cfg.fp16 else torch.float32)
-
     quantization_config = None
+
     if cfg.load_in_4bit:
         compute_dtype = torch.bfloat16 if cfg.bnb_4bit_compute_dtype == "bfloat16" else torch.float16
         quantization_config = BitsAndBytesConfig(
@@ -167,14 +149,12 @@ def build_model_and_tokenizer(cfg: ScriptConfig):
     model.config.pad_token_id = tokenizer.pad_token_id
     if hasattr(model.config, "use_cache"):
         model.config.use_cache = False if cfg.gradient_checkpointing else True
-
     return model, tokenizer
 
 
 def build_peft_config(cfg: ScriptConfig):
     if not cfg.use_lora:
         return None
-
     from peft import LoraConfig
 
     target_modules = [x.strip() for x in cfg.lora_target_modules.split(",") if x.strip()]
@@ -256,13 +236,10 @@ def main() -> None:
         peft_config=peft_config,
     )
     trainer.add_callback(RewardLoggingCallback(cfg.output_dir))
-
     trainer.train(resume_from_checkpoint=cfg.resume_from_checkpoint)
-
     trainer.save_model(cfg.output_dir)
     tokenizer.save_pretrained(cfg.output_dir)
 
-    # Save final adapter/full model path marker for downstream inference scripts.
     with open(Path(cfg.output_dir) / "DONE", "w", encoding="utf-8") as f:
         f.write("GRPO training completed.\n")
 
