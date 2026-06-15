@@ -1,0 +1,61 @@
+# Environment / secrets
+.env
+.env.*
+!.env.example
+*.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Logs
+*.log
+logs/
+runs/
+wandb/
+
+# TensorBoard
+/events.out.tfevents.*
+**/events.out.tfevents.*
+
+# Training outputs / checkpoints
+outputs/
+checkpoints/
+checkpoint-*/
+**/checkpoint-*/
+**/reward_logs.jsonl
+**/predictions/
+**/test_predictions/
+
+# Model artifacts
+*.safetensors
+*.bin
+*.pt
+*.pth
+*.ckpt
+*.onnx
+adapter_model.safetensors
+pytorch_model.bin
+
+# Data files - keep large/local datasets out by default
+*.jsonl
+*.parquet
+*.arrow
+*.csv
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
