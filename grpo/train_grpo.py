@@ -7,7 +7,7 @@ import json
 import os
 from dataclasses import MISSING, asdict, dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, TrainerCallback
@@ -17,8 +17,16 @@ try:
 except ImportError as exc:
     raise ImportError("Please install TRL: pip install trl") from exc
 
-from data_utils import load_train_eval_datasets
-from rewards import REWARD_FUNCS
+from data_utils import canonical_json, load_train_eval_datasets
+from rewards import (
+    REWARD_FUNCS,
+    length_sanity_reward,
+    no_markdown_or_prose_reward,
+    reference_similarity_reward,
+    schema_key_overlap_reward,
+    valid_json_reward,
+    widget_type_match_reward,
+)
 
 
 @dataclass
@@ -45,6 +53,12 @@ class ScriptConfig:
     eval_steps: int = 100
     save_steps: int = 100
     save_total_limit: int = 3
+    prediction_save_steps: int = 100
+    prediction_num_samples: int = 16
+    prediction_max_new_tokens: int = 512
+    prediction_do_sample: bool = False
+    prediction_temperature: float = 0.0
+    prediction_top_p: float = 1.0
     temperature: float = 0.9
     top_p: float = 0.95
     beta: float = 0.04
@@ -97,6 +111,50 @@ def parse_args() -> ScriptConfig:
     return ScriptConfig(**vars(args))
 
 
+def _model_device(model: torch.nn.Module) -> torch.device:
+    try:
+        return next(model.parameters()).device
+    except StopIteration:
+        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+def _parse_json_ok(text: str) -> bool:
+    try:
+        json.loads(text)
+        return True
+    except Exception:
+        return False
+
+
+def _top_level_type(text: str) -> Optional[str]:
+    try:
+        obj = json.loads(text)
+        if isinstance(obj, dict):
+            for key in ("type", "widget", "name", "component"):
+                value = obj.get(key)
+                if isinstance(value, str):
+                    return value.lower().strip()
+    except Exception:
+        return None
+    return None
+
+
+def _compute_reward_parts(prompt: str, completion: str, reference: str) -> Dict[str, float]:
+    prompts = [prompt]
+    completions = [completion]
+    refs = [reference]
+    reward_parts = {
+        "valid_json_reward": valid_json_reward(prompts, completions)[0],
+        "no_markdown_or_prose_reward": no_markdown_or_prose_reward(prompts, completions)[0],
+        "widget_type_match_reward": widget_type_match_reward(prompts, completions, genui_json=refs)[0],
+        "schema_key_overlap_reward": schema_key_overlap_reward(prompts, completions, genui_json=refs)[0],
+        "reference_similarity_reward": reference_similarity_reward(prompts, completions, genui_json=refs)[0],
+        "length_sanity_reward": length_sanity_reward(prompts, completions, genui_json=refs)[0],
+    }
+    reward_parts["total_reward"] = float(sum(reward_parts.values()))
+    return reward_parts
+
+
 class RewardLoggingCallback(TrainerCallback):
     """Keep a JSONL backup of trainer logs next to TensorBoard logs."""
 
@@ -118,6 +176,150 @@ class RewardLoggingCallback(TrainerCallback):
                 continue
         with self.path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+class PeriodicPredictionCallback(TrainerCallback):
+    """Save eval-set predictions every N optimizer steps during training.
+
+    Output layout:
+        output_dir/predictions/step_100/predictions.jsonl
+        output_dir/predictions/step_100/metrics.json
+
+    Only process rank 0 writes files to avoid duplicate outputs in distributed runs.
+    """
+
+    def __init__(
+        self,
+        output_dir: str,
+        eval_dataset,
+        tokenizer,
+        save_steps: int,
+        num_samples: int,
+        max_prompt_length: int,
+        max_new_tokens: int,
+        do_sample: bool,
+        temperature: float,
+        top_p: float,
+    ) -> None:
+        self.output_dir = Path(output_dir)
+        self.eval_dataset = eval_dataset
+        self.tokenizer = tokenizer
+        self.save_steps = save_steps
+        self.num_samples = num_samples
+        self.max_prompt_length = max_prompt_length
+        self.max_new_tokens = max_new_tokens
+        self.do_sample = do_sample
+        self.temperature = temperature
+        self.top_p = top_p
+        self._last_saved_step = -1
+
+    def on_step_end(self, args, state, control, model=None, **kwargs):  # type: ignore[override]
+        if self.save_steps <= 0 or self.num_samples <= 0:
+            return
+        if state.global_step <= 0 or state.global_step % self.save_steps != 0:
+            return
+        if state.global_step == self._last_saved_step:
+            return
+        if getattr(args, "process_index", 0) != 0:
+            return
+        if model is None:
+            return
+
+        self._last_saved_step = int(state.global_step)
+        self._save_predictions(model=model, step=int(state.global_step))
+
+    def _generate_one(self, model, prompt: str) -> str:
+        device = _model_device(model)
+        inputs = self.tokenizer(
+            prompt,
+            return_tensors="pt",
+            truncation=True,
+            max_length=self.max_prompt_length,
+        )
+        inputs = {k: v.to(device) for k, v in inputs.items()}
+
+        gen_kwargs: Dict[str, Any] = {
+            "max_new_tokens": self.max_new_tokens,
+            "pad_token_id": self.tokenizer.pad_token_id,
+            "eos_token_id": self.tokenizer.eos_token_id,
+            "do_sample": self.do_sample,
+        }
+        if self.do_sample:
+            gen_kwargs["temperature"] = self.temperature
+            gen_kwargs["top_p"] = self.top_p
+
+        with torch.no_grad():
+            output_ids = model.generate(**inputs, **gen_kwargs)
+
+        generated_ids = output_ids[0][inputs["input_ids"].shape[-1] :]
+        return self.tokenizer.decode(generated_ids, skip_special_tokens=True).strip()
+
+    def _save_predictions(self, model, step: int) -> None:
+        was_training = model.training
+        model.eval()
+
+        step_dir = self.output_dir / "predictions" / f"step_{step}"
+        step_dir.mkdir(parents=True, exist_ok=True)
+        pred_path = step_dir / "predictions.jsonl"
+        metrics_path = step_dir / "metrics.json"
+
+        metrics: Dict[str, Any] = {
+            "step": step,
+            "num_samples": 0,
+            "valid_json_count": 0,
+            "exact_canonical_match_count": 0,
+            "widget_type_match_count": 0,
+            "total_reward_sum": 0.0,
+        }
+
+        n = min(self.num_samples, len(self.eval_dataset))
+        with pred_path.open("w", encoding="utf-8") as f:
+            for idx in range(n):
+                row = self.eval_dataset[int(idx)]
+                prompt = str(row["prompt"])
+                response_text = str(row.get("response_text", ""))
+                reference = canonical_json(row["genui_json"])
+                prediction = self._generate_one(model, prompt)
+                rewards = _compute_reward_parts(prompt, prediction, reference)
+
+                pred_canon = canonical_json(prediction)
+                ref_canon = canonical_json(reference)
+                valid = _parse_json_ok(prediction)
+                widget_match = _top_level_type(prediction) is not None and _top_level_type(prediction) == _top_level_type(reference)
+                exact_match = valid and pred_canon == ref_canon
+
+                metrics["num_samples"] += 1
+                metrics["valid_json_count"] += int(valid)
+                metrics["exact_canonical_match_count"] += int(exact_match)
+                metrics["widget_type_match_count"] += int(widget_match)
+                metrics["total_reward_sum"] += rewards["total_reward"]
+
+                out = {
+                    "step": step,
+                    "idx": idx,
+                    "response_text": response_text,
+                    "prompt": prompt,
+                    "reference_genui_json": reference,
+                    "prediction": prediction,
+                    "prediction_canonical": pred_canon,
+                    "valid_json": valid,
+                    "exact_canonical_match": exact_match,
+                    "widget_type_match": widget_match,
+                    "rewards": rewards,
+                }
+                f.write(json.dumps(out, ensure_ascii=False) + "\n")
+
+        denom = max(metrics["num_samples"], 1)
+        metrics["valid_json_rate"] = metrics["valid_json_count"] / denom
+        metrics["exact_canonical_match_rate"] = metrics["exact_canonical_match_count"] / denom
+        metrics["widget_type_match_rate"] = metrics["widget_type_match_count"] / denom
+        metrics["avg_total_reward"] = metrics["total_reward_sum"] / denom
+
+        with metrics_path.open("w", encoding="utf-8") as f:
+            json.dump(metrics, f, indent=2, ensure_ascii=False)
+
+        if was_training:
+            model.train()
 
 
 def build_model_and_tokenizer(cfg: ScriptConfig):
@@ -236,6 +438,20 @@ def main() -> None:
         peft_config=peft_config,
     )
     trainer.add_callback(RewardLoggingCallback(cfg.output_dir))
+    trainer.add_callback(
+        PeriodicPredictionCallback(
+            output_dir=cfg.output_dir,
+            eval_dataset=eval_dataset,
+            tokenizer=tokenizer,
+            save_steps=cfg.prediction_save_steps,
+            num_samples=cfg.prediction_num_samples,
+            max_prompt_length=cfg.max_prompt_length,
+            max_new_tokens=cfg.prediction_max_new_tokens,
+            do_sample=cfg.prediction_do_sample,
+            temperature=cfg.prediction_temperature,
+            top_p=cfg.prediction_top_p,
+        )
+    )
     trainer.train(resume_from_checkpoint=cfg.resume_from_checkpoint)
     trainer.save_model(cfg.output_dir)
     tokenizer.save_pretrained(cfg.output_dir)
