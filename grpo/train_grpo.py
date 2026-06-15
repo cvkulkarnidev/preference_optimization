@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import inspect
 import json
 import os
 from dataclasses import MISSING, asdict, dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, TrainerCallback
@@ -179,14 +180,7 @@ class RewardLoggingCallback(TrainerCallback):
 
 
 class PeriodicPredictionCallback(TrainerCallback):
-    """Save eval-set predictions every N optimizer steps during training.
-
-    Output layout:
-        output_dir/predictions/step_100/predictions.jsonl
-        output_dir/predictions/step_100/metrics.json
-
-    Only process rank 0 writes files to avoid duplicate outputs in distributed runs.
-    """
+    """Save eval-set predictions every N optimizer steps during training."""
 
     def __init__(
         self,
@@ -375,6 +369,61 @@ def build_peft_config(cfg: ScriptConfig):
     )
 
 
+def build_grpo_config(cfg: ScriptConfig) -> GRPOConfig:
+    """Build GRPOConfig while tolerating TRL version differences.
+
+    Some TRL releases do not expose newer fields like max_prompt_length,
+    max_completion_length, num_generations, log_completions, or use the older
+    TrainingArguments name evaluation_strategy instead of eval_strategy.
+    Unsupported keys are ignored with a printed warning instead of crashing.
+    """
+    kwargs: Dict[str, Any] = {
+        "output_dir": cfg.output_dir,
+        "run_name": cfg.run_name,
+        "report_to": [x.strip() for x in cfg.report_to.split(",") if x.strip()],
+        "logging_dir": str(Path(cfg.output_dir) / "logs"),
+        "seed": cfg.seed,
+        "learning_rate": cfg.learning_rate,
+        "weight_decay": cfg.weight_decay,
+        "warmup_ratio": cfg.warmup_ratio,
+        "num_train_epochs": cfg.num_train_epochs,
+        "max_steps": cfg.max_steps,
+        "per_device_train_batch_size": cfg.per_device_train_batch_size,
+        "per_device_eval_batch_size": cfg.per_device_eval_batch_size,
+        "gradient_accumulation_steps": cfg.gradient_accumulation_steps,
+        "gradient_checkpointing": cfg.gradient_checkpointing,
+        "logging_steps": cfg.logging_steps,
+        "eval_strategy": "steps",
+        "eval_steps": cfg.eval_steps,
+        "save_strategy": "steps",
+        "save_steps": cfg.save_steps,
+        "save_total_limit": cfg.save_total_limit,
+        "bf16": cfg.bf16,
+        "fp16": cfg.fp16,
+        "beta": cfg.beta,
+        "max_prompt_length": cfg.max_prompt_length,
+        "max_completion_length": cfg.max_completion_length,
+        "num_generations": cfg.num_generations,
+        "temperature": cfg.temperature,
+        "top_p": cfg.top_p,
+        "remove_unused_columns": False,
+        "log_completions": True,
+    }
+
+    signature = inspect.signature(GRPOConfig.__init__)
+    supported = set(signature.parameters.keys())
+
+    if "eval_strategy" not in supported and "evaluation_strategy" in supported:
+        kwargs["evaluation_strategy"] = kwargs.pop("eval_strategy")
+
+    filtered = {key: value for key, value in kwargs.items() if key in supported}
+    ignored = sorted(set(kwargs) - set(filtered))
+    if ignored:
+        print(f"[GRPOConfig compatibility] Ignoring unsupported args for installed TRL version: {ignored}")
+
+    return GRPOConfig(**filtered)
+
+
 def main() -> None:
     cfg = parse_args()
     os.makedirs(cfg.output_dir, exist_ok=True)
@@ -394,39 +443,7 @@ def main() -> None:
 
     model, tokenizer = build_model_and_tokenizer(cfg)
     peft_config = build_peft_config(cfg)
-
-    training_args = GRPOConfig(
-        output_dir=cfg.output_dir,
-        run_name=cfg.run_name,
-        report_to=[x.strip() for x in cfg.report_to.split(",") if x.strip()],
-        logging_dir=str(Path(cfg.output_dir) / "logs"),
-        seed=cfg.seed,
-        learning_rate=cfg.learning_rate,
-        weight_decay=cfg.weight_decay,
-        warmup_ratio=cfg.warmup_ratio,
-        num_train_epochs=cfg.num_train_epochs,
-        max_steps=cfg.max_steps,
-        per_device_train_batch_size=cfg.per_device_train_batch_size,
-        per_device_eval_batch_size=cfg.per_device_eval_batch_size,
-        gradient_accumulation_steps=cfg.gradient_accumulation_steps,
-        gradient_checkpointing=cfg.gradient_checkpointing,
-        logging_steps=cfg.logging_steps,
-        eval_strategy="steps",
-        eval_steps=cfg.eval_steps,
-        save_strategy="steps",
-        save_steps=cfg.save_steps,
-        save_total_limit=cfg.save_total_limit,
-        bf16=cfg.bf16,
-        fp16=cfg.fp16,
-        beta=cfg.beta,
-        max_prompt_length=cfg.max_prompt_length,
-        max_completion_length=cfg.max_completion_length,
-        num_generations=cfg.num_generations,
-        temperature=cfg.temperature,
-        top_p=cfg.top_p,
-        remove_unused_columns=False,
-        log_completions=True,
-    )
+    training_args = build_grpo_config(cfg)
 
     trainer = GRPOTrainer(
         model=model,
