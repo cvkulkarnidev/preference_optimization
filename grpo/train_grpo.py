@@ -66,6 +66,7 @@ class ScriptConfig:
     bf16: bool = True
     fp16: bool = False
     tf32: bool = True
+    use_cpu: bool = False
     use_lora: bool = True
     lora_r: int = 16
     lora_alpha: int = 32
@@ -110,6 +111,40 @@ def parse_args() -> ScriptConfig:
 
     args = parser.parse_args()
     return ScriptConfig(**vars(args))
+
+
+def normalize_runtime_config(cfg: ScriptConfig) -> ScriptConfig:
+    """Avoid device/precision combinations that crash TrainingArguments.
+
+    - CPU mode requires use_cpu=True and disables bf16/fp16/tf32.
+    - If CUDA is not visible, automatically switches to CPU mode.
+    - If bf16 is requested but unsupported by the GPU, falls back to fp16 when possible.
+    - 4-bit loading is disabled on CPU because bitsandbytes 4-bit is GPU-only.
+    """
+    cuda_available = torch.cuda.is_available()
+
+    if cfg.use_cpu or not cuda_available:
+        if not cuda_available and not cfg.use_cpu:
+            print("[runtime] CUDA is not available. Switching to --use_cpu true.")
+        cfg.use_cpu = True
+        cfg.bf16 = False
+        cfg.fp16 = False
+        cfg.tf32 = False
+        if cfg.load_in_4bit:
+            print("[runtime] Disabling --load_in_4bit because CPU mode does not support bitsandbytes 4-bit loading.")
+            cfg.load_in_4bit = False
+        return cfg
+
+    if cfg.bf16 and not torch.cuda.is_bf16_supported():
+        print("[runtime] bf16 was requested, but this GPU does not support bf16. Falling back to fp16.")
+        cfg.bf16 = False
+        cfg.fp16 = True
+
+    if cfg.bf16 and cfg.fp16:
+        print("[runtime] Both bf16 and fp16 were enabled. Using bf16 and disabling fp16.")
+        cfg.fp16 = False
+
+    return cfg
 
 
 def _model_device(model: torch.nn.Module) -> torch.device:
@@ -317,9 +352,12 @@ class PeriodicPredictionCallback(TrainerCallback):
 
 
 def build_model_and_tokenizer(cfg: ScriptConfig):
-    torch_dtype = torch.bfloat16 if cfg.bf16 else (torch.float16 if cfg.fp16 else torch.float32)
-    quantization_config = None
+    if cfg.use_cpu:
+        torch_dtype = torch.float32
+    else:
+        torch_dtype = torch.bfloat16 if cfg.bf16 else (torch.float16 if cfg.fp16 else torch.float32)
 
+    quantization_config = None
     if cfg.load_in_4bit:
         compute_dtype = torch.bfloat16 if cfg.bnb_4bit_compute_dtype == "bfloat16" else torch.float16
         quantization_config = BitsAndBytesConfig(
@@ -341,6 +379,9 @@ def build_model_and_tokenizer(cfg: ScriptConfig):
         quantization_config=quantization_config,
         device_map=None,
     )
+
+    if cfg.use_cpu:
+        model.to("cpu")
 
     model.config.pad_token_id = tokenizer.pad_token_id
     if hasattr(model.config, "use_cache"):
@@ -370,13 +411,7 @@ def build_peft_config(cfg: ScriptConfig):
 
 
 def build_grpo_config(cfg: ScriptConfig) -> GRPOConfig:
-    """Build GRPOConfig while tolerating TRL version differences.
-
-    Some TRL releases do not expose newer fields like max_prompt_length,
-    max_completion_length, num_generations, log_completions, or use the older
-    TrainingArguments name evaluation_strategy instead of eval_strategy.
-    Unsupported keys are ignored with a printed warning instead of crashing.
-    """
+    """Build GRPOConfig while tolerating TRL version differences."""
     kwargs: Dict[str, Any] = {
         "output_dir": cfg.output_dir,
         "run_name": cfg.run_name,
@@ -400,6 +435,8 @@ def build_grpo_config(cfg: ScriptConfig) -> GRPOConfig:
         "save_total_limit": cfg.save_total_limit,
         "bf16": cfg.bf16,
         "fp16": cfg.fp16,
+        "use_cpu": cfg.use_cpu,
+        "no_cuda": cfg.use_cpu,
         "beta": cfg.beta,
         "max_prompt_length": cfg.max_prompt_length,
         "max_completion_length": cfg.max_completion_length,
@@ -416,6 +453,11 @@ def build_grpo_config(cfg: ScriptConfig) -> GRPOConfig:
     if "eval_strategy" not in supported and "evaluation_strategy" in supported:
         kwargs["evaluation_strategy"] = kwargs.pop("eval_strategy")
 
+    if "use_cpu" in supported:
+        kwargs.pop("no_cuda", None)
+    elif "no_cuda" in supported:
+        kwargs.pop("use_cpu", None)
+
     filtered = {key: value for key, value in kwargs.items() if key in supported}
     ignored = sorted(set(kwargs) - set(filtered))
     if ignored:
@@ -425,10 +467,10 @@ def build_grpo_config(cfg: ScriptConfig) -> GRPOConfig:
 
 
 def main() -> None:
-    cfg = parse_args()
+    cfg = normalize_runtime_config(parse_args())
     os.makedirs(cfg.output_dir, exist_ok=True)
 
-    if cfg.tf32 and torch.cuda.is_available():
+    if cfg.tf32 and torch.cuda.is_available() and not cfg.use_cpu:
         torch.backends.cuda.matmul.allow_tf32 = True
 
     with open(Path(cfg.output_dir) / "train_config.json", "w", encoding="utf-8") as f:
