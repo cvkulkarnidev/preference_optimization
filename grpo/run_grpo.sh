@@ -88,8 +88,29 @@ BNB_4BIT_COMPUTE_DTYPE="bfloat16"
 
 mkdir -p "${OUTPUT_DIR}"
 
+# -----------------------------
+# CUDA preflight
+# This uses the same python that launches accelerate, avoiding environment mismatch.
+# -----------------------------
+echo "Python: $(which python)"
+python - <<'PY'
+import sys
+import torch
+print("python executable:", sys.executable)
+print("torch version:", torch.__version__)
+print("torch cuda build:", torch.version.cuda)
+print("cuda available:", torch.cuda.is_available())
+print("cuda device count:", torch.cuda.device_count())
+if torch.cuda.is_available():
+    print("gpu 0:", torch.cuda.get_device_name(0))
+else:
+    raise SystemExit(
+        "CUDA is not visible in this Python environment. Fix the active env / torch CUDA wheel before training."
+    )
+PY
+
 CMD=(
-  accelerate launch --num_processes 1 grpo/train_grpo_gpu.py
+  python -m accelerate.commands.launch --num_processes 1 grpo/train_grpo_gpu.py
   --model_path "${MODEL_PATH}"
   --train_jsonl "${TRAIN_JSONL}"
   --output_dir "${OUTPUT_DIR}"
