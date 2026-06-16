@@ -5,7 +5,7 @@ set -euo pipefail
 # Editable paths
 # -----------------------------
 MODEL_PATH="/home/c.kulkarni/hf_models/google/gemma-4-E2B-it"
-TRAIN_JSONL="/path/to/train.jsonl"
+TRAIN_JSONL="/home/c.kulkarni/mdc/GenUI-LM/training_scripts/sft/gen_data_v2/genui_processed_clean_merged.jsonl"
 EVAL_JSONL=""   # Keep empty to auto-split train into train/val
 OUTPUT_DIR="./outputs/grpo_genui"
 
@@ -31,8 +31,8 @@ TF32=true
 # Important: global train batch size should be divisible by NUM_GENERATIONS.
 # global batch = PER_DEVICE_TRAIN_BATCH_SIZE * num_processes * GRADIENT_ACCUMULATION_STEPS
 # -----------------------------
-MAX_PROMPT_LENGTH=1024
-MAX_COMPLETION_LENGTH=512
+MAX_PROMPT_LENGTH=4096
+MAX_COMPLETION_LENGTH=4096
 NUM_GENERATIONS=4
 TEMPERATURE=0.9
 TOP_P=0.95
@@ -69,7 +69,7 @@ RESUME_FROM_CHECKPOINT=""
 # -----------------------------
 PREDICTION_SAVE_STEPS=100
 PREDICTION_NUM_SAMPLES=16
-PREDICTION_MAX_NEW_TOKENS=512
+PREDICTION_MAX_NEW_TOKENS=4096
 PREDICTION_DO_SAMPLE=false
 PREDICTION_TEMPERATURE=0.0
 PREDICTION_TOP_P=1.0
