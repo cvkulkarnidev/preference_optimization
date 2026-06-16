@@ -16,6 +16,17 @@ VALIDATION_SPLIT=0.05
 SEED=42
 
 # -----------------------------
+# Runtime / precision
+# For one GPU, keep USE_CPU=false.
+# FP16=true is safer than BF16 on older/non-bf16 GPUs.
+# If your GPU supports bf16, you can set BF16=true and FP16=false.
+# -----------------------------
+USE_CPU=false
+BF16=false
+FP16=true
+TF32=true
+
+# -----------------------------
 # GRPO generation settings
 # Important: global train batch size should be divisible by NUM_GENERATIONS.
 # global batch = PER_DEVICE_TRAIN_BATCH_SIZE * num_processes * GRADIENT_ACCUMULATION_STEPS
@@ -39,9 +50,6 @@ PER_DEVICE_TRAIN_BATCH_SIZE=1
 PER_DEVICE_EVAL_BATCH_SIZE=1
 GRADIENT_ACCUMULATION_STEPS=8
 GRADIENT_CHECKPOINTING=true
-BF16=true
-FP16=false
-TF32=true
 
 # -----------------------------
 # Logging/checkpoints
@@ -81,7 +89,7 @@ BNB_4BIT_COMPUTE_DTYPE="bfloat16"
 mkdir -p "${OUTPUT_DIR}"
 
 CMD=(
-  accelerate launch grpo/train_grpo.py
+  accelerate launch --num_processes 1 grpo/train_grpo.py
   --model_path "${MODEL_PATH}"
   --train_jsonl "${TRAIN_JSONL}"
   --output_dir "${OUTPUT_DIR}"
@@ -115,6 +123,7 @@ CMD=(
   --bf16 "${BF16}"
   --fp16 "${FP16}"
   --tf32 "${TF32}"
+  --use_cpu "${USE_CPU}"
   --use_lora "${USE_LORA}"
   --lora_r "${LORA_R}"
   --lora_alpha "${LORA_ALPHA}"
