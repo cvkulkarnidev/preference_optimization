@@ -89,7 +89,7 @@ BNB_4BIT_COMPUTE_DTYPE="bfloat16"
 mkdir -p "${OUTPUT_DIR}"
 
 CMD=(
-  accelerate launch --num_processes 1 grpo/train_grpo.py
+  accelerate launch --num_processes 1 grpo/train_grpo_gpu.py
   --model_path "${MODEL_PATH}"
   --train_jsonl "${TRAIN_JSONL}"
   --output_dir "${OUTPUT_DIR}"
