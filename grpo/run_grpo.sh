@@ -30,6 +30,7 @@ TF32=true
 # GRPO generation settings
 # Important: global train batch size should be divisible by NUM_GENERATIONS.
 # global batch = PER_DEVICE_TRAIN_BATCH_SIZE * num_processes * GRADIENT_ACCUMULATION_STEPS
+# For one GPU below: 1 * 1 * 8 = 8, divisible by NUM_GENERATIONS=4.
 # -----------------------------
 MAX_PROMPT_LENGTH=4096
 MAX_COMPLETION_LENGTH=4096
@@ -90,7 +91,7 @@ mkdir -p "${OUTPUT_DIR}"
 
 # -----------------------------
 # CUDA preflight
-# This uses the same python that launches accelerate, avoiding environment mismatch.
+# This uses the same python that runs training.
 # -----------------------------
 echo "Python: $(which python)"
 python - <<'PY'
@@ -110,7 +111,7 @@ else:
 PY
 
 CMD=(
-  python -m accelerate.commands.launch --num_processes 1 grpo/train_grpo_gpu.py
+  python grpo/train_grpo_gpu.py
   --model_path "${MODEL_PATH}"
   --train_jsonl "${TRAIN_JSONL}"
   --output_dir "${OUTPUT_DIR}"
