@@ -1,16 +1,32 @@
-# CUDA 12.2-compatible setup
-# Install PyTorch first, from the same environment used for training:
-# pip uninstall -y torch torchvision torchaudio trl transformers accelerate peft
-# pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cu121
+# CUDA 13.x attempt
+# Important: PyTorch package indexes are tagged by wheel runtime, e.g. cu130.
+# There may not be a separate cu132 wheel even if your local CUDA toolkit is 13.2.
+# Official stable PyTorch currently lists CUDA 12.6 and CUDA 12.8 as stable compute platforms;
+# CUDA 13 wheels may require nightly/pre-release packages.
+#
+# Clean install in the same environment used for training:
+# pip uninstall -y torch torchvision torchaudio trl transformers accelerate peft bitsandbytes
+# pip install --pre torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu130
 # pip install -r grpo/requirements.txt
+#
+# Verify before training:
+# python - <<'PY'
+# import torch
+# print('torch:', torch.__version__)
+# print('torch cuda build:', torch.version.cuda)
+# print('cuda available:', torch.cuda.is_available())
+# print('gpu:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else None)
+# from trl import GRPOTrainer, GRPOConfig
+# print('TRL GRPO import ok')
+# PY
 
-# Keep these pinned. Newer TRL/Accelerate builds may import FSDPModule,
-# which is not available in some torch builds and causes import-time failures.
-transformers==4.45.2
-datasets==2.20.0
-accelerate==0.34.2
-trl==0.11.4
-peft==0.13.2
-tensorboard==2.17.1
-scikit-learn==1.5.2
-bitsandbytes==0.44.1
+# CUDA 13/nightly torch generally needs a newer training stack.
+# Keep ranges here instead of older pins, because older TRL may not support GRPO properly.
+transformers>=4.51.0
+datasets>=2.20.0
+accelerate>=1.6.0
+trl>=0.17.0
+peft>=0.15.0
+tensorboard>=2.17.0
+scikit-learn>=1.5.0
+bitsandbytes>=0.45.0
