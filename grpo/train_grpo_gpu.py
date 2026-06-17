@@ -81,6 +81,28 @@ def _linear_lora_target_names(model: torch.nn.Module) -> List[str]:
     return sorted(set(exact_names))
 
 
+def _configure_finite_safe_generation(model: torch.nn.Module, tokenizer) -> None:
+    """Guard generation against NaN/Inf logits before multinomial sampling.
+
+    The CUDA assertion `probability tensor contains inf, nan or element < 0`
+    usually happens inside sampling when logits become non-finite, especially
+    with fp16 + long context/completion. These generation_config flags add the
+    Transformers InfNanRemoveLogitsProcessor and renormalize probabilities.
+    """
+    if hasattr(model, "generation_config"):
+        model.generation_config.remove_invalid_values = True
+        model.generation_config.renormalize_logits = True
+        model.generation_config.pad_token_id = tokenizer.pad_token_id
+        model.generation_config.eos_token_id = tokenizer.eos_token_id
+        # Keep sampling enabled for GRPO, but avoid extremely sharp distributions.
+        if getattr(model.generation_config, "temperature", None) is not None:
+            model.generation_config.temperature = max(float(model.generation_config.temperature), 0.7)
+        if getattr(model.generation_config, "top_p", None) is not None:
+            model.generation_config.top_p = min(float(model.generation_config.top_p), 0.95)
+
+    print("[generation] Enabled remove_invalid_values=True and renormalize_logits=True")
+
+
 def build_peft_config_gpu_safe(cfg: train_grpo.ScriptConfig):
     if not cfg.use_lora:
         return None
@@ -115,6 +137,7 @@ def patched_main() -> None:
     )
 
     model, tokenizer = train_grpo.build_model_and_tokenizer(cfg)
+    _configure_finite_safe_generation(model, tokenizer)
 
     peft_config = None
     if cfg.use_lora:
