@@ -3,9 +3,12 @@ set -euo pipefail
 
 # -----------------------------
 # Editable paths
+# Run this script from inside the grpo/ folder:
+#   cd grpo
+#   bash run_grpo.sh
 # -----------------------------
-MODEL_PATH="/home/c.kulkarni/hf_models/google/gemma-4-E2B-it"
-TRAIN_JSONL="/home/c.kulkarni/mdc/GenUI-LM/training_scripts/sft/gen_data_v2/genui_processed_clean_merged.jsonl"
+MODEL_PATH="/home/c_kulkarni/models/gemma-4-E2B-it"
+TRAIN_JSONL="/home/c_kulkarni/grpo/genui_processed_clean_merged.jsonl"
 EVAL_JSONL=""   # Keep empty to auto-split train into train/val
 OUTPUT_DIR="./outputs/grpo_genui"
 
@@ -112,7 +115,7 @@ else:
 PY
 
 CMD=(
-  python grpo/train_grpo_gpu.py
+  python train_grpo_gpu.py
   --model_path "${MODEL_PATH}"
   --train_jsonl "${TRAIN_JSONL}"
   --output_dir "${OUTPUT_DIR}"
