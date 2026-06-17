@@ -28,15 +28,16 @@ TF32=true
 
 # -----------------------------
 # GRPO generation settings
-# Important: global train batch size should be divisible by NUM_GENERATIONS.
-# global batch = PER_DEVICE_TRAIN_BATCH_SIZE * num_processes * GRADIENT_ACCUMULATION_STEPS
-# For one GPU below: 1 * 1 * 8 = 8, divisible by NUM_GENERATIONS=4.
+# Important: TRL checks global generation batch as:
+# PER_DEVICE_TRAIN_BATCH_SIZE * num_processes
+# It does not count GRADIENT_ACCUMULATION_STEPS for this divisibility check.
+# With one GPU and per-device batch size 1, NUM_GENERATIONS must be 1.
 # -----------------------------
 MAX_PROMPT_LENGTH=4096
 MAX_COMPLETION_LENGTH=4096
-NUM_GENERATIONS=4
-TEMPERATURE=0.9
-TOP_P=0.95
+NUM_GENERATIONS=1
+TEMPERATURE=0.7
+TOP_P=0.9
 BETA=0.04
 
 # -----------------------------
