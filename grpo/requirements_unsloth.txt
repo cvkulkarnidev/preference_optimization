@@ -1,0 +1,16 @@
+# Unsloth GRPO setup
+# Install in the same environment used for training.
+# For CUDA 13/nightly torch, install torch first as you were testing:
+# pip install --pre torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu130
+# Then:
+# pip install -r requirements_unsloth.txt
+
+unsloth
+trl>=0.17.0
+transformers>=4.51.0
+accelerate>=1.6.0
+peft>=0.15.0
+datasets>=2.20.0
+tensorboard>=2.17.0
+scikit-learn>=1.5.0
+bitsandbytes>=0.45.0
