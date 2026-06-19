@@ -13,9 +13,11 @@ OUTPUT_DIR="./outputs/unsloth_grpo_genui"
 VALIDATION_SPLIT=0.05
 SEED=42
 
-MAX_SEQ_LENGTH=8192
-MAX_PROMPT_LENGTH=4096
+# Your input/prompt can be up to 8192 tokens.
+# max_seq_length should cover prompt + completion budget.
+MAX_PROMPT_LENGTH=8192
 MAX_COMPLETION_LENGTH=4096
+MAX_SEQ_LENGTH=12288
 NUM_GENERATIONS=1
 TEMPERATURE=0.7
 TOP_P=0.9
@@ -30,6 +32,9 @@ PER_DEVICE_TRAIN_BATCH_SIZE=1
 PER_DEVICE_EVAL_BATCH_SIZE=1
 GRADIENT_ACCUMULATION_STEPS=8
 
+# Monitoring + checkpointing
+# TensorBoard logs: ${OUTPUT_DIR}/runs or ${OUTPUT_DIR}/events*
+# Checkpoints: ${OUTPUT_DIR}/checkpoint-<step>
 LOGGING_STEPS=5
 EVAL_STEPS=100
 SAVE_STEPS=100
