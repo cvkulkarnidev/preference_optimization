@@ -45,15 +45,16 @@ class UnslothGRPOConfig:
     validation_split: float = 0.05
     seed: int = 42
 
-    max_seq_length: int = 10240
-    max_prompt_length: int = 2048
-    max_completion_length: int = 8192
+    # Ultra-low defaults so direct python execution also smoke-tests safely.
+    max_seq_length: int = 1024
+    max_prompt_length: int = 512
+    max_completion_length: int = 512
     num_generations: int = 2
     temperature: float = 0.7
     top_p: float = 0.9
     beta: float = 0.04
 
-    learning_rate: float = 5e-6
+    learning_rate: float = 2e-6
     weight_decay: float = 0.0
     warmup_ratio: float = 0.03
     num_train_epochs: float = 1.0
@@ -62,22 +63,23 @@ class UnslothGRPOConfig:
     per_device_eval_batch_size: int = 2
     gradient_accumulation_steps: int = 8
     logging_steps: int = 5
-    eval_steps: int = 100
-    save_steps: int = 100
-    save_total_limit: int = 3
+    eval_strategy: str = "no"
+    eval_steps: int = 0
+    save_steps: int = 500
+    save_total_limit: int = 2
     report_to: str = "tensorboard"
     run_name: str = "unsloth_grpo_genui"
     resume_from_checkpoint: Optional[str] = None
 
     load_in_4bit: bool = True
     fast_inference: bool = False
-    gpu_memory_utilization: float = 0.75
+    gpu_memory_utilization: float = 0.35
 
     use_lora: bool = True
-    lora_r: int = 16
-    lora_alpha: int = 32
+    lora_r: int = 4
+    lora_alpha: int = 8
     lora_dropout: float = 0.05
-    lora_target_modules: str = "q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj"
+    lora_target_modules: str = "q_proj,v_proj"
 
     bf16: bool = False
     fp16: bool = True
@@ -116,12 +118,20 @@ def parse_args() -> UnslothGRPOConfig:
     return UnslothGRPOConfig(**vars(parser.parse_args()))
 
 
+def _gpu_mem(label: str) -> None:
+    if torch.cuda.is_available():
+        allocated = torch.cuda.memory_allocated(0) / 1024**3
+        reserved = torch.cuda.memory_reserved(0) / 1024**3
+        print(f"[gpu memory] {label}: allocated={allocated:.3f} GB, reserved={reserved:.3f} GB")
+
+
 def normalize_precision(cfg: UnslothGRPOConfig) -> UnslothGRPOConfig:
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA is not visible to PyTorch. Unsloth GRPO is intended for GPU training.")
 
     print(f"[runtime] GPU: {torch.cuda.get_device_name(0)}")
     print(f"[runtime] torch: {torch.__version__}, cuda build: {torch.version.cuda}")
+    _gpu_mem("startup")
 
     if cfg.tf32:
         torch.backends.cuda.matmul.allow_tf32 = True
@@ -159,16 +169,14 @@ def validate_grpo_batch_config(cfg: UnslothGRPOConfig) -> None:
         raise ValueError(
             "Invalid GRPO train batch configuration: "
             f"({cfg.per_device_train_batch_size} * {num_processes}) must be divisible by "
-            f"num_generations={cfg.num_generations}. "
-            "Increase PER_DEVICE_TRAIN_BATCH_SIZE or reduce NUM_GENERATIONS."
+            f"num_generations={cfg.num_generations}."
         )
 
-    if eval_global_generation_batch % cfg.num_generations != 0:
+    if cfg.eval_strategy != "no" and eval_global_generation_batch % cfg.num_generations != 0:
         raise ValueError(
             "Invalid GRPO eval batch configuration: "
             f"({cfg.per_device_eval_batch_size} * {num_processes}) must be divisible by "
-            f"num_generations={cfg.num_generations}. "
-            "Increase PER_DEVICE_EVAL_BATCH_SIZE or reduce NUM_GENERATIONS."
+            f"num_generations={cfg.num_generations}."
         )
 
 
@@ -191,12 +199,7 @@ def _assert_local_model_path(model_path: str) -> Path:
 
 
 def _strip_unsupported_generate_kwargs(model) -> None:
-    """Patch model.generate to ignore multimodal kwargs leaked by Unsloth/Gemma processors.
-
-    Some Gemma/Unsloth paths pass `mm_token_type_ids` during generation. Text-only
-    causal models reject it inside transformers' `_validate_model_kwargs`. We strip it
-    at the outer model.generate boundary so GRPO generation can continue.
-    """
+    """Patch model.generate to ignore multimodal kwargs leaked by Unsloth/Gemma processors."""
     original_generate = model.generate
 
     def generate_without_unused_kwargs(self, *args, **kwargs):
@@ -211,7 +214,6 @@ def _strip_unsupported_generate_kwargs(model) -> None:
 
     model.generate = MethodType(generate_without_unused_kwargs, model)
 
-    # PEFT sometimes delegates generation to the base model. Patch that too if present.
     base_model = getattr(model, "base_model", None)
     if base_model is not None and hasattr(base_model, "generate"):
         original_base_generate = base_model.generate
@@ -247,16 +249,15 @@ def build_model_and_tokenizer(cfg: UnslothGRPOConfig):
         gpu_memory_utilization=cfg.gpu_memory_utilization,
     )
 
-    # Use local-only loading when supported by the installed Unsloth version.
     supported = set(inspect.signature(FastLanguageModel.from_pretrained).parameters)
-    for key in ("local_files_only", "trust_remote_code"):
-        if key == "local_files_only" and key in supported:
-            kwargs[key] = True
-        if key == "trust_remote_code" and key in supported:
-            kwargs[key] = True
+    if "local_files_only" in supported:
+        kwargs["local_files_only"] = True
+    if "trust_remote_code" in supported:
+        kwargs["trust_remote_code"] = True
 
     print(f"[model] Loading local model only from: {model_path}")
     model, tokenizer = FastLanguageModel.from_pretrained(**kwargs)
+    _gpu_mem("after model load")
 
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -281,6 +282,7 @@ def build_model_and_tokenizer(cfg: UnslothGRPOConfig):
             use_gradient_checkpointing="unsloth",
             random_state=cfg.seed,
         )
+        _gpu_mem("after LoRA attach")
 
     _strip_unsupported_generate_kwargs(model)
     return model, tokenizer
@@ -300,8 +302,8 @@ def build_grpo_config(cfg: UnslothGRPOConfig) -> GRPOConfig:
         per_device_eval_batch_size=cfg.per_device_eval_batch_size,
         gradient_accumulation_steps=cfg.gradient_accumulation_steps,
         logging_steps=cfg.logging_steps,
-        eval_strategy="steps",
-        eval_steps=cfg.eval_steps,
+        eval_strategy=cfg.eval_strategy,
+        eval_steps=cfg.eval_steps if cfg.eval_strategy != "no" else None,
         save_steps=cfg.save_steps,
         save_total_limit=cfg.save_total_limit,
         bf16=cfg.bf16,
@@ -331,9 +333,12 @@ def main() -> None:
         validation_split=cfg.validation_split,
         seed=cfg.seed,
     )
+    if cfg.eval_strategy == "no":
+        eval_dataset = None
 
     model, tokenizer = build_model_and_tokenizer(cfg)
     training_args = build_grpo_config(cfg)
+    _gpu_mem("before trainer init")
 
     trainer = GRPOTrainer(
         model=model,
@@ -343,6 +348,7 @@ def main() -> None:
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
     )
+    _gpu_mem("after trainer init")
 
     trainer.train(resume_from_checkpoint=cfg.resume_from_checkpoint)
     trainer.save_model(cfg.output_dir)
