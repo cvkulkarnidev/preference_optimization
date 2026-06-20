@@ -70,10 +70,10 @@ class UnslothGRPOConfig:
     validation_split: float = 0.05
     seed: int = 42
 
-    # Extreme low-memory defaults so direct python execution also smoke-tests safely.
-    max_seq_length: int = 256
-    max_prompt_length: int = 128
-    max_completion_length: int = 128
+    # Long-output GenUI defaults. The launcher passes the same values.
+    max_seq_length: int = 8704
+    max_prompt_length: int = 512
+    max_completion_length: int = 8192
     num_generations: int = 2
     temperature: float = 0.7
     top_p: float = 0.9
