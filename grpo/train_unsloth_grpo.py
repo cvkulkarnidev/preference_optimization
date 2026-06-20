@@ -58,7 +58,7 @@ class UnslothGRPOConfig:
     num_train_epochs: float = 1.0
     max_steps: int = -1
     per_device_train_batch_size: int = 2
-    per_device_eval_batch_size: int = 1
+    per_device_eval_batch_size: int = 2
     gradient_accumulation_steps: int = 8
     logging_steps: int = 5
     eval_steps: int = 100
@@ -140,23 +140,34 @@ def normalize_precision(cfg: UnslothGRPOConfig) -> UnslothGRPOConfig:
 def validate_grpo_batch_config(cfg: UnslothGRPOConfig) -> None:
     """Fail early with the exact values TRL will check."""
     num_processes = int(os.environ.get("WORLD_SIZE", "1"))
-    global_generation_batch = cfg.per_device_train_batch_size * num_processes
+    train_global_generation_batch = cfg.per_device_train_batch_size * num_processes
+    eval_global_generation_batch = cfg.per_device_eval_batch_size * num_processes
 
     print("[GRPO batch check]")
     print(f"  per_device_train_batch_size = {cfg.per_device_train_batch_size}")
+    print(f"  per_device_eval_batch_size  = {cfg.per_device_eval_batch_size}")
     print(f"  num_processes / WORLD_SIZE  = {num_processes}")
     print(f"  num_generations             = {cfg.num_generations}")
-    print(f"  checked global batch         = {global_generation_batch}")
+    print(f"  checked train global batch   = {train_global_generation_batch}")
+    print(f"  checked eval global batch    = {eval_global_generation_batch}")
 
     if cfg.num_generations < 2:
         raise ValueError("GRPO requires num_generations >= 2.")
 
-    if global_generation_batch % cfg.num_generations != 0:
+    if train_global_generation_batch % cfg.num_generations != 0:
         raise ValueError(
-            "Invalid GRPO batch configuration: "
+            "Invalid GRPO train batch configuration: "
             f"({cfg.per_device_train_batch_size} * {num_processes}) must be divisible by "
             f"num_generations={cfg.num_generations}. "
             "Increase PER_DEVICE_TRAIN_BATCH_SIZE or reduce NUM_GENERATIONS."
+        )
+
+    if eval_global_generation_batch % cfg.num_generations != 0:
+        raise ValueError(
+            "Invalid GRPO eval batch configuration: "
+            f"({cfg.per_device_eval_batch_size} * {num_processes}) must be divisible by "
+            f"num_generations={cfg.num_generations}. "
+            "Increase PER_DEVICE_EVAL_BATCH_SIZE or reduce NUM_GENERATIONS."
         )
 
 
