@@ -44,10 +44,10 @@ class UnslothGRPOConfig:
     validation_split: float = 0.05
     seed: int = 42
 
-    max_seq_length: int = 8192
-    max_prompt_length: int = 4096
-    max_completion_length: int = 4096
-    num_generations: int = 1
+    max_seq_length: int = 10240
+    max_prompt_length: int = 2048
+    max_completion_length: int = 8192
+    num_generations: int = 2
     temperature: float = 0.7
     top_p: float = 0.9
     beta: float = 0.04
@@ -57,7 +57,7 @@ class UnslothGRPOConfig:
     warmup_ratio: float = 0.03
     num_train_epochs: float = 1.0
     max_steps: int = -1
-    per_device_train_batch_size: int = 1
+    per_device_train_batch_size: int = 2
     per_device_eval_batch_size: int = 1
     gradient_accumulation_steps: int = 8
     logging_steps: int = 5
@@ -135,6 +135,29 @@ def normalize_precision(cfg: UnslothGRPOConfig) -> UnslothGRPOConfig:
         cfg.fp16 = False
 
     return cfg
+
+
+def validate_grpo_batch_config(cfg: UnslothGRPOConfig) -> None:
+    """Fail early with the exact values TRL will check."""
+    num_processes = int(os.environ.get("WORLD_SIZE", "1"))
+    global_generation_batch = cfg.per_device_train_batch_size * num_processes
+
+    print("[GRPO batch check]")
+    print(f"  per_device_train_batch_size = {cfg.per_device_train_batch_size}")
+    print(f"  num_processes / WORLD_SIZE  = {num_processes}")
+    print(f"  num_generations             = {cfg.num_generations}")
+    print(f"  checked global batch         = {global_generation_batch}")
+
+    if cfg.num_generations < 2:
+        raise ValueError("GRPO requires num_generations >= 2.")
+
+    if global_generation_batch % cfg.num_generations != 0:
+        raise ValueError(
+            "Invalid GRPO batch configuration: "
+            f"({cfg.per_device_train_batch_size} * {num_processes}) must be divisible by "
+            f"num_generations={cfg.num_generations}. "
+            "Increase PER_DEVICE_TRAIN_BATCH_SIZE or reduce NUM_GENERATIONS."
+        )
 
 
 def _assert_local_model_path(model_path: str) -> Path:
@@ -244,6 +267,7 @@ def build_grpo_config(cfg: UnslothGRPOConfig) -> GRPOConfig:
 
 def main() -> None:
     cfg = normalize_precision(parse_args())
+    validate_grpo_batch_config(cfg)
     os.makedirs(cfg.output_dir, exist_ok=True)
 
     with open(Path(cfg.output_dir) / "unsloth_train_config.json", "w", encoding="utf-8") as f:
