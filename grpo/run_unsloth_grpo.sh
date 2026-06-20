@@ -5,6 +5,11 @@ set -euo pipefail
 #   cd grpo
 #   bash run_unsloth_grpo.sh
 
+# Force local-only loading. This prevents accidental downloads such as gpt-oss-20b.
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+export HF_DATASETS_OFFLINE=1
+
 MODEL_PATH="/home/c_kulkarni/models/gemma-4-E2B-it"
 TRAIN_JSONL="/home/c_kulkarni/grpo/genui_processed_clean_merged.jsonl"
 EVAL_JSONL=""
@@ -13,11 +18,10 @@ OUTPUT_DIR="./outputs/unsloth_grpo_genui"
 VALIDATION_SPLIT=0.05
 SEED=42
 
-# Your input/prompt can be up to 8192 tokens.
-# max_seq_length should cover prompt + completion budget.
-MAX_PROMPT_LENGTH=8192
-MAX_COMPLETION_LENGTH=4096
-MAX_SEQ_LENGTH=12288
+# Input is the agent response, usually small. Output JSON can be large.
+MAX_PROMPT_LENGTH=2048
+MAX_COMPLETION_LENGTH=8192
+MAX_SEQ_LENGTH=10240
 NUM_GENERATIONS=1
 TEMPERATURE=0.7
 TOP_P=0.9
@@ -61,13 +65,28 @@ mkdir -p "${OUTPUT_DIR}"
 
 echo "Python: $(which python)"
 python - <<'PY'
+import os
 import sys
+from pathlib import Path
 import torch
+
+model_path = Path("/home/c_kulkarni/models/gemma-4-E2B-it")
+train_jsonl = Path("/home/c_kulkarni/grpo/genui_processed_clean_merged.jsonl")
+
 print("python executable:", sys.executable)
 print("torch version:", torch.__version__)
 print("torch cuda build:", torch.version.cuda)
 print("cuda available:", torch.cuda.is_available())
 print("cuda device count:", torch.cuda.device_count())
+print("HF_HUB_OFFLINE:", os.environ.get("HF_HUB_OFFLINE"))
+print("TRANSFORMERS_OFFLINE:", os.environ.get("TRANSFORMERS_OFFLINE"))
+print("model path exists:", model_path.exists(), model_path)
+print("train jsonl exists:", train_jsonl.exists(), train_jsonl)
+
+if not model_path.exists():
+    raise SystemExit(f"Model path missing: {model_path}. Refusing to download fallback model.")
+if not train_jsonl.exists():
+    raise SystemExit(f"Train JSONL missing: {train_jsonl}")
 if torch.cuda.is_available():
     print("gpu 0:", torch.cuda.get_device_name(0))
 else:
