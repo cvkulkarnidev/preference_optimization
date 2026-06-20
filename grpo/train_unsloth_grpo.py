@@ -16,6 +16,7 @@ import json
 import os
 from dataclasses import MISSING, asdict, dataclass
 from pathlib import Path
+from types import MethodType
 from typing import Optional
 
 # Prevent accidental hub downloads. The model path must be local.
@@ -189,6 +190,45 @@ def _assert_local_model_path(model_path: str) -> Path:
     return path
 
 
+def _strip_unsupported_generate_kwargs(model) -> None:
+    """Patch model.generate to ignore multimodal kwargs leaked by Unsloth/Gemma processors.
+
+    Some Gemma/Unsloth paths pass `mm_token_type_ids` during generation. Text-only
+    causal models reject it inside transformers' `_validate_model_kwargs`. We strip it
+    at the outer model.generate boundary so GRPO generation can continue.
+    """
+    original_generate = model.generate
+
+    def generate_without_unused_kwargs(self, *args, **kwargs):
+        removed = []
+        for key in ("mm_token_type_ids", "token_type_ids"):
+            if key in kwargs:
+                kwargs.pop(key, None)
+                removed.append(key)
+        if removed:
+            print(f"[generate] Removed unused kwargs: {removed}")
+        return original_generate(*args, **kwargs)
+
+    model.generate = MethodType(generate_without_unused_kwargs, model)
+
+    # PEFT sometimes delegates generation to the base model. Patch that too if present.
+    base_model = getattr(model, "base_model", None)
+    if base_model is not None and hasattr(base_model, "generate"):
+        original_base_generate = base_model.generate
+
+        def base_generate_without_unused_kwargs(self, *args, **kwargs):
+            removed = []
+            for key in ("mm_token_type_ids", "token_type_ids"):
+                if key in kwargs:
+                    kwargs.pop(key, None)
+                    removed.append(key)
+            if removed:
+                print(f"[base generate] Removed unused kwargs: {removed}")
+            return original_base_generate(*args, **kwargs)
+
+        base_model.generate = MethodType(base_generate_without_unused_kwargs, base_model)
+
+
 def build_model_and_tokenizer(cfg: UnslothGRPOConfig):
     model_path = _assert_local_model_path(cfg.model_path)
 
@@ -242,6 +282,7 @@ def build_model_and_tokenizer(cfg: UnslothGRPOConfig):
             random_state=cfg.seed,
         )
 
+    _strip_unsupported_generate_kwargs(model)
     return model, tokenizer
 
 
