@@ -26,12 +26,11 @@ OUTPUT_DIR="./outputs/unsloth_grpo_genui"
 VALIDATION_SPLIT=0.05
 SEED=42
 
-# Extreme low-memory smoke-test config.
-# This is only to verify that GRPO can step without OOM.
-# Increase these only after the smoke test works.
-MAX_PROMPT_LENGTH=128
-MAX_COMPLETION_LENGTH=128
-MAX_SEQ_LENGTH=256
+# Long-output GenUI config.
+# Keep prompt moderate; output is large JSON/IR.
+MAX_PROMPT_LENGTH=512
+MAX_COMPLETION_LENGTH=8192
+MAX_SEQ_LENGTH=8704
 
 # GRPO minimum valid setting.
 NUM_GENERATIONS=2
