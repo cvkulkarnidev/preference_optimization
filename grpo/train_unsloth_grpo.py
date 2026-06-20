@@ -25,7 +25,31 @@ os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 os.environ.setdefault("HF_DATASETS_OFFLINE", "1")
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True,max_split_size_mb:32")
 
+# Singularity/HPC images may not expose gcc/cc. TorchInductor/Triton compilation
+# then fails with "Failed to find C compiler". Disable compile before importing Unsloth.
+os.environ.setdefault("TORCH_COMPILE_DISABLE", "1")
+os.environ.setdefault("TORCHDYNAMO_DISABLE", "1")
+
 import torch
+
+try:
+    import torch._dynamo
+
+    torch._dynamo.config.suppress_errors = True
+except Exception:
+    pass
+
+# Hard-disable torch.compile in this training entrypoint. This avoids TorchInductor
+# subprocess compilation in environments without a C compiler. Slower, but stable.
+if os.environ.get("TORCH_COMPILE_DISABLE", "0") == "1":
+    def _no_compile(model=None, *args, **kwargs):
+        if model is None:
+            return lambda inner: inner
+        return model
+
+    torch.compile = _no_compile
+    print("[runtime] torch.compile disabled; running eager mode.")
+
 from unsloth import FastLanguageModel, PatchFastRL
 
 # Patch TRL GRPO before importing GRPOTrainer/GRPOConfig.
@@ -137,6 +161,8 @@ def normalize_precision(cfg: UnslothGRPOConfig) -> UnslothGRPOConfig:
 
     print(f"[runtime] GPU: {torch.cuda.get_device_name(0)}")
     print(f"[runtime] torch: {torch.__version__}, cuda build: {torch.version.cuda}")
+    print(f"[runtime] TORCH_COMPILE_DISABLE={os.environ.get('TORCH_COMPILE_DISABLE')}")
+    print(f"[runtime] TORCHDYNAMO_DISABLE={os.environ.get('TORCHDYNAMO_DISABLE')}")
     _gpu_mem("startup")
 
     if cfg.tf32:
@@ -213,12 +239,7 @@ def _accepts_kwarg(callable_obj, key: str) -> bool:
 
 
 def _patch_forward_logits_to_keep(model) -> None:
-    """Avoid full-vocabulary logits for every prompt token during generation prefill.
-
-    The observed OOM comes from Gemma4 `lm_head(hidden_states[:, slice_indices, :])`.
-    During generation, only last-token logits are needed for the next-token decision.
-    Some Unsloth/Gemma paths do not pass this optimization automatically, so we add it.
-    """
+    """Avoid full-vocabulary logits for every prompt token during generation prefill."""
     seen: set[int] = set()
 
     def patch_one(module, label: str) -> None:
@@ -267,7 +288,6 @@ def _strip_unsupported_generate_kwargs(model) -> None:
         if removed:
             print(f"[generate] Removed unused kwargs: {removed}")
 
-        # Generation only needs next-token logits; full prompt logits can allocate tens of GB.
         kwargs.setdefault("logits_to_keep", 1)
         kwargs.setdefault("output_scores", False)
         kwargs.setdefault("return_dict_in_generate", False)
@@ -275,8 +295,6 @@ def _strip_unsupported_generate_kwargs(model) -> None:
         try:
             return original_generate(*args, **kwargs)
         except ValueError as exc:
-            # If this transformers/Unsloth version rejects logits_to_keep as a generate kwarg,
-            # retry without it. The forward patch above may still handle the optimization.
             if "logits_to_keep" in str(exc) and "model_kwargs" in str(exc):
                 kwargs.pop("logits_to_keep", None)
                 print("[generate] logits_to_keep rejected by generate(); retrying without generate kwarg")
