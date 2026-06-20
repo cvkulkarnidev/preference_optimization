@@ -10,6 +10,9 @@ export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
 export HF_DATASETS_OFFLINE=1
 
+# Reduce CUDA fragmentation on long generation workloads.
+export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True,max_split_size_mb:128"
+
 MODEL_PATH="/home/c_kulkarni/models/gemma-4-E2B-it"
 TRAIN_JSONL="/home/c_kulkarni/grpo/genui_processed_clean_merged.jsonl"
 EVAL_JSONL=""
@@ -18,14 +21,16 @@ OUTPUT_DIR="./outputs/unsloth_grpo_genui"
 VALIDATION_SPLIT=0.05
 SEED=42
 
-# Input is the agent response, usually small. Output JSON can be large.
-MAX_PROMPT_LENGTH=2048
-MAX_COMPLETION_LENGTH=8192
-MAX_SEQ_LENGTH=10240
+# Memory-safe GRPO config.
+# OOM was caused by generation memory, not LoRA trainable-parameter memory.
+# Keep prompt small and increase completion gradually only after this runs.
+MAX_PROMPT_LENGTH=1024
+MAX_COMPLETION_LENGTH=2048
+MAX_SEQ_LENGTH=3072
 
 # GRPO needs at least 2 generations. TRL also requires:
 # PER_DEVICE_*_BATCH_SIZE * num_processes must be divisible by NUM_GENERATIONS.
-# With one GPU, set train/eval batch size to 2.
+# With one GPU, train/eval batch size must be 2 for NUM_GENERATIONS=2.
 NUM_GENERATIONS=2
 PER_DEVICE_TRAIN_BATCH_SIZE=2
 PER_DEVICE_EVAL_BATCH_SIZE=2
@@ -34,7 +39,7 @@ TEMPERATURE=0.7
 TOP_P=0.9
 BETA=0.04
 
-LEARNING_RATE=5e-6
+LEARNING_RATE=3e-6
 WEIGHT_DECAY=0.0
 WARMUP_RATIO=0.03
 NUM_TRAIN_EPOCHS=1
@@ -45,20 +50,20 @@ GRADIENT_ACCUMULATION_STEPS=8
 # TensorBoard logs: ${OUTPUT_DIR}/runs or ${OUTPUT_DIR}/events*
 # Checkpoints: ${OUTPUT_DIR}/checkpoint-<step>
 LOGGING_STEPS=5
-EVAL_STEPS=100
-SAVE_STEPS=100
-SAVE_TOTAL_LIMIT=3
+EVAL_STEPS=500
+SAVE_STEPS=500
+SAVE_TOTAL_LIMIT=2
 REPORT_TO="tensorboard"
 RUN_NAME="unsloth_grpo_genui"
 RESUME_FROM_CHECKPOINT=""
 
 LOAD_IN_4BIT=true
 FAST_INFERENCE=false
-GPU_MEMORY_UTILIZATION=0.75
+GPU_MEMORY_UTILIZATION=0.55
 
 USE_LORA=true
-LORA_R=16
-LORA_ALPHA=32
+LORA_R=8
+LORA_ALPHA=16
 LORA_DROPOUT=0.05
 LORA_TARGET_MODULES="q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj"
 
@@ -85,6 +90,7 @@ print("cuda available:", torch.cuda.is_available())
 print("cuda device count:", torch.cuda.device_count())
 print("HF_HUB_OFFLINE:", os.environ.get("HF_HUB_OFFLINE"))
 print("TRANSFORMERS_OFFLINE:", os.environ.get("TRANSFORMERS_OFFLINE"))
+print("PYTORCH_CUDA_ALLOC_CONF:", os.environ.get("PYTORCH_CUDA_ALLOC_CONF"))
 print("model path exists:", model_path.exists(), model_path)
 print("train jsonl exists:", train_jsonl.exists(), train_jsonl)
 
