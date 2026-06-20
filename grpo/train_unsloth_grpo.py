@@ -23,6 +23,7 @@ from typing import Optional
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
 os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 os.environ.setdefault("HF_DATASETS_OFFLINE", "1")
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True,max_split_size_mb:32")
 
 import torch
 from unsloth import FastLanguageModel, PatchFastRL
@@ -45,10 +46,10 @@ class UnslothGRPOConfig:
     validation_split: float = 0.05
     seed: int = 42
 
-    # Ultra-low defaults so direct python execution also smoke-tests safely.
-    max_seq_length: int = 1024
-    max_prompt_length: int = 512
-    max_completion_length: int = 512
+    # Extreme low-memory defaults so direct python execution also smoke-tests safely.
+    max_seq_length: int = 256
+    max_prompt_length: int = 128
+    max_completion_length: int = 128
     num_generations: int = 2
     temperature: float = 0.7
     top_p: float = 0.9
@@ -73,11 +74,11 @@ class UnslothGRPOConfig:
 
     load_in_4bit: bool = True
     fast_inference: bool = False
-    gpu_memory_utilization: float = 0.35
+    gpu_memory_utilization: float = 0.20
 
     use_lora: bool = True
-    lora_r: int = 4
-    lora_alpha: int = 8
+    lora_r: int = 2
+    lora_alpha: int = 4
     lora_dropout: float = 0.05
     lora_target_modules: str = "q_proj,v_proj"
 
@@ -120,9 +121,14 @@ def parse_args() -> UnslothGRPOConfig:
 
 def _gpu_mem(label: str) -> None:
     if torch.cuda.is_available():
+        free, total = torch.cuda.mem_get_info(0)
         allocated = torch.cuda.memory_allocated(0) / 1024**3
         reserved = torch.cuda.memory_reserved(0) / 1024**3
-        print(f"[gpu memory] {label}: allocated={allocated:.3f} GB, reserved={reserved:.3f} GB")
+        print(
+            f"[gpu memory] {label}: "
+            f"free={free / 1024**3:.3f} GB, total={total / 1024**3:.3f} GB, "
+            f"allocated={allocated:.3f} GB, reserved={reserved:.3f} GB"
+        )
 
 
 def normalize_precision(cfg: UnslothGRPOConfig) -> UnslothGRPOConfig:
@@ -198,8 +204,58 @@ def _assert_local_model_path(model_path: str) -> Path:
     return path
 
 
+def _accepts_kwarg(callable_obj, key: str) -> bool:
+    try:
+        params = inspect.signature(callable_obj).parameters
+    except (TypeError, ValueError):
+        return False
+    return key in params or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
+
+
+def _patch_forward_logits_to_keep(model) -> None:
+    """Avoid full-vocabulary logits for every prompt token during generation prefill.
+
+    The observed OOM comes from Gemma4 `lm_head(hidden_states[:, slice_indices, :])`.
+    During generation, only last-token logits are needed for the next-token decision.
+    Some Unsloth/Gemma paths do not pass this optimization automatically, so we add it.
+    """
+    seen: set[int] = set()
+
+    def patch_one(module, label: str) -> None:
+        if module is None or not hasattr(module, "forward") or id(module) in seen:
+            return
+        seen.add(id(module))
+
+        original_forward = module.forward
+        supports_logits_to_keep = _accepts_kwarg(original_forward, "logits_to_keep")
+        supports_num_logits_to_keep = _accepts_kwarg(original_forward, "num_logits_to_keep")
+        if not supports_logits_to_keep and not supports_num_logits_to_keep:
+            return
+
+        def forward_with_limited_logits(self, *args, **kwargs):
+            if not self.training:
+                if supports_logits_to_keep:
+                    kwargs.setdefault("logits_to_keep", 1)
+                elif supports_num_logits_to_keep:
+                    kwargs.setdefault("num_logits_to_keep", 1)
+            return original_forward(*args, **kwargs)
+
+        module.forward = MethodType(forward_with_limited_logits, module)
+        print(f"[memory] Patched generation logits_to_keep on {label}")
+
+    candidates = [
+        (model, "model"),
+        (getattr(model, "base_model", None), "model.base_model"),
+        (getattr(getattr(model, "base_model", None), "model", None), "model.base_model.model"),
+        (getattr(model, "model", None), "model.model"),
+        (getattr(getattr(model, "model", None), "model", None), "model.model.model"),
+    ]
+    for module, label in candidates:
+        patch_one(module, label)
+
+
 def _strip_unsupported_generate_kwargs(model) -> None:
-    """Patch model.generate to ignore multimodal kwargs leaked by Unsloth/Gemma processors."""
+    """Patch model.generate to ignore leaked multimodal kwargs and request last-token logits."""
     original_generate = model.generate
 
     def generate_without_unused_kwargs(self, *args, **kwargs):
@@ -210,7 +266,22 @@ def _strip_unsupported_generate_kwargs(model) -> None:
                 removed.append(key)
         if removed:
             print(f"[generate] Removed unused kwargs: {removed}")
-        return original_generate(*args, **kwargs)
+
+        # Generation only needs next-token logits; full prompt logits can allocate tens of GB.
+        kwargs.setdefault("logits_to_keep", 1)
+        kwargs.setdefault("output_scores", False)
+        kwargs.setdefault("return_dict_in_generate", False)
+
+        try:
+            return original_generate(*args, **kwargs)
+        except ValueError as exc:
+            # If this transformers/Unsloth version rejects logits_to_keep as a generate kwarg,
+            # retry without it. The forward patch above may still handle the optimization.
+            if "logits_to_keep" in str(exc) and "model_kwargs" in str(exc):
+                kwargs.pop("logits_to_keep", None)
+                print("[generate] logits_to_keep rejected by generate(); retrying without generate kwarg")
+                return original_generate(*args, **kwargs)
+            raise
 
     model.generate = MethodType(generate_without_unused_kwargs, model)
 
@@ -226,9 +297,34 @@ def _strip_unsupported_generate_kwargs(model) -> None:
                     removed.append(key)
             if removed:
                 print(f"[base generate] Removed unused kwargs: {removed}")
-            return original_base_generate(*args, **kwargs)
+            kwargs.setdefault("logits_to_keep", 1)
+            kwargs.setdefault("output_scores", False)
+            kwargs.setdefault("return_dict_in_generate", False)
+            try:
+                return original_base_generate(*args, **kwargs)
+            except ValueError as exc:
+                if "logits_to_keep" in str(exc) and "model_kwargs" in str(exc):
+                    kwargs.pop("logits_to_keep", None)
+                    print("[base generate] logits_to_keep rejected by generate(); retrying without generate kwarg")
+                    return original_base_generate(*args, **kwargs)
+                raise
 
         base_model.generate = MethodType(base_generate_without_unused_kwargs, base_model)
+
+
+def _print_quantization_report(model) -> None:
+    try:
+        import bitsandbytes as bnb
+
+        linear4bit = getattr(bnb.nn, "Linear4bit", None)
+        if linear4bit is not None:
+            n_4bit = sum(1 for module in model.modules() if isinstance(module, linear4bit))
+            print(f"[quantization] Linear4bit modules: {n_4bit}")
+    except Exception as exc:
+        print(f"[quantization] Could not inspect bitsandbytes modules: {exc}")
+
+    print("[quantization] model.is_loaded_in_4bit:", getattr(model, "is_loaded_in_4bit", None))
+    print("[quantization] model dtype:", getattr(model, "dtype", None))
 
 
 def build_model_and_tokenizer(cfg: UnslothGRPOConfig):
@@ -258,6 +354,7 @@ def build_model_and_tokenizer(cfg: UnslothGRPOConfig):
     print(f"[model] Loading local model only from: {model_path}")
     model, tokenizer = FastLanguageModel.from_pretrained(**kwargs)
     _gpu_mem("after model load")
+    _print_quantization_report(model)
 
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -283,7 +380,9 @@ def build_model_and_tokenizer(cfg: UnslothGRPOConfig):
             random_state=cfg.seed,
         )
         _gpu_mem("after LoRA attach")
+        _print_quantization_report(model)
 
+    _patch_forward_logits_to_keep(model)
     _strip_unsupported_generate_kwargs(model)
     return model, tokenizer
 
