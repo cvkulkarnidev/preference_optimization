@@ -24,10 +24,11 @@ MAX_COMPLETION_LENGTH=8192
 MAX_SEQ_LENGTH=10240
 
 # GRPO needs at least 2 generations. TRL also requires:
-# PER_DEVICE_TRAIN_BATCH_SIZE * num_processes must be divisible by NUM_GENERATIONS.
-# With one GPU, set both to 2.
+# PER_DEVICE_*_BATCH_SIZE * num_processes must be divisible by NUM_GENERATIONS.
+# With one GPU, set train/eval batch size to 2.
 NUM_GENERATIONS=2
 PER_DEVICE_TRAIN_BATCH_SIZE=2
+PER_DEVICE_EVAL_BATCH_SIZE=2
 
 TEMPERATURE=0.7
 TOP_P=0.9
@@ -38,7 +39,6 @@ WEIGHT_DECAY=0.0
 WARMUP_RATIO=0.03
 NUM_TRAIN_EPOCHS=1
 MAX_STEPS=-1
-PER_DEVICE_EVAL_BATCH_SIZE=1
 GRADIENT_ACCUMULATION_STEPS=8
 
 # Monitoring + checkpointing
