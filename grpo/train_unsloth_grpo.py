@@ -11,11 +11,17 @@ Expected JSONL keys:
 from __future__ import annotations
 
 import argparse
+import inspect
 import json
 import os
-from dataclasses import asdict, dataclass
+from dataclasses import MISSING, asdict, dataclass
 from pathlib import Path
 from typing import Optional
+
+# Prevent accidental hub downloads. The model path must be local.
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+os.environ.setdefault("HF_DATASETS_OFFLINE", "1")
 
 import torch
 from unsloth import FastLanguageModel, PatchFastRL
@@ -93,7 +99,7 @@ def parse_args() -> UnslothGRPOConfig:
     for field_name, field_def in UnslothGRPOConfig.__dataclass_fields__.items():
         default = field_def.default
         arg_name = f"--{field_name}"
-        required = default.__class__.__name__ == "_MISSING_TYPE"
+        required = default is MISSING
 
         if required:
             parser.add_argument(arg_name, required=True)
@@ -131,21 +137,52 @@ def normalize_precision(cfg: UnslothGRPOConfig) -> UnslothGRPOConfig:
     return cfg
 
 
+def _assert_local_model_path(model_path: str) -> Path:
+    path = Path(model_path).expanduser().resolve()
+    if not path.exists() or not path.is_dir():
+        raise FileNotFoundError(
+            f"Model path does not exist locally: {path}\n"
+            "Refusing to download any model from Hugging Face. Fix MODEL_PATH in run_unsloth_grpo.sh."
+        )
+
+    expected_any = ["config.json", "tokenizer.json", "tokenizer.model", "model.safetensors.index.json"]
+    if not any((path / name).exists() for name in expected_any):
+        raise FileNotFoundError(
+            f"The local model directory does not look complete: {path}\n"
+            f"Expected at least one of: {expected_any}\n"
+            "Refusing to download any fallback model."
+        )
+    return path
+
+
 def build_model_and_tokenizer(cfg: UnslothGRPOConfig):
+    model_path = _assert_local_model_path(cfg.model_path)
+
     dtype = None
     if cfg.bf16:
         dtype = torch.bfloat16
     elif cfg.fp16:
         dtype = torch.float16
 
-    model, tokenizer = FastLanguageModel.from_pretrained(
-        model_name=cfg.model_path,
+    kwargs = dict(
+        model_name=str(model_path),
         max_seq_length=cfg.max_seq_length,
         load_in_4bit=cfg.load_in_4bit,
         dtype=dtype,
         fast_inference=cfg.fast_inference,
         gpu_memory_utilization=cfg.gpu_memory_utilization,
     )
+
+    # Use local-only loading when supported by the installed Unsloth version.
+    supported = set(inspect.signature(FastLanguageModel.from_pretrained).parameters)
+    for key in ("local_files_only", "trust_remote_code"):
+        if key == "local_files_only" and key in supported:
+            kwargs[key] = True
+        if key == "trust_remote_code" and key in supported:
+            kwargs[key] = True
+
+    print(f"[model] Loading local model only from: {model_path}")
+    model, tokenizer = FastLanguageModel.from_pretrained(**kwargs)
 
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
