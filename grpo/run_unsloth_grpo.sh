@@ -13,6 +13,11 @@ export HF_DATASETS_OFFLINE=1
 # Reduce CUDA fragmentation on generation workloads.
 export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True,max_split_size_mb:32"
 
+# This Singularity image does not expose a C compiler, so TorchInductor/Triton
+# compilation fails with "Failed to find C compiler". Force eager execution.
+export TORCH_COMPILE_DISABLE=1
+export TORCHDYNAMO_DISABLE=1
+
 MODEL_PATH="/home/c_kulkarni/models/gemma-4-E2B-it"
 TRAIN_JSONL="/home/c_kulkarni/grpo/genui_processed_clean_merged.jsonl"
 EVAL_JSONL=""
@@ -76,6 +81,7 @@ python - <<'PY'
 import os
 import sys
 from pathlib import Path
+import shutil
 import torch
 
 model_path = Path("/home/c_kulkarni/models/gemma-4-E2B-it")
@@ -89,6 +95,9 @@ print("cuda device count:", torch.cuda.device_count())
 print("HF_HUB_OFFLINE:", os.environ.get("HF_HUB_OFFLINE"))
 print("TRANSFORMERS_OFFLINE:", os.environ.get("TRANSFORMERS_OFFLINE"))
 print("PYTORCH_CUDA_ALLOC_CONF:", os.environ.get("PYTORCH_CUDA_ALLOC_CONF"))
+print("TORCH_COMPILE_DISABLE:", os.environ.get("TORCH_COMPILE_DISABLE"))
+print("TORCHDYNAMO_DISABLE:", os.environ.get("TORCHDYNAMO_DISABLE"))
+print("C compiler found:", shutil.which("gcc") or shutil.which("cc") or shutil.which("clang"))
 print("model path exists:", model_path.exists(), model_path)
 print("train jsonl exists:", train_jsonl.exists(), train_jsonl)
 
