@@ -11,7 +11,7 @@ export TRANSFORMERS_OFFLINE=1
 export HF_DATASETS_OFFLINE=1
 
 # Reduce CUDA fragmentation on generation workloads.
-export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True,max_split_size_mb:64"
+export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True,max_split_size_mb:32"
 
 MODEL_PATH="/home/c_kulkarni/models/gemma-4-E2B-it"
 TRAIN_JSONL="/home/c_kulkarni/grpo/genui_processed_clean_merged.jsonl"
@@ -21,11 +21,12 @@ OUTPUT_DIR="./outputs/unsloth_grpo_genui"
 VALIDATION_SPLIT=0.05
 SEED=42
 
-# Ultra-low-memory smoke-test config.
-# If this OOMs, the model itself or another process is occupying the GPU.
-MAX_PROMPT_LENGTH=512
-MAX_COMPLETION_LENGTH=512
-MAX_SEQ_LENGTH=1024
+# Extreme low-memory smoke-test config.
+# This is only to verify that GRPO can step without OOM.
+# Increase these only after the smoke test works.
+MAX_PROMPT_LENGTH=128
+MAX_COMPLETION_LENGTH=128
+MAX_SEQ_LENGTH=256
 
 # GRPO minimum valid setting.
 NUM_GENERATIONS=2
@@ -55,11 +56,11 @@ RESUME_FROM_CHECKPOINT=""
 
 LOAD_IN_4BIT=true
 FAST_INFERENCE=false
-GPU_MEMORY_UTILIZATION=0.35
+GPU_MEMORY_UTILIZATION=0.20
 
 USE_LORA=true
-LORA_R=4
-LORA_ALPHA=8
+LORA_R=2
+LORA_ALPHA=4
 LORA_DROPOUT=0.05
 # Start with q/v only to reduce adapter + gradient memory. Add more modules after it runs.
 LORA_TARGET_MODULES="q_proj,v_proj"
@@ -97,6 +98,9 @@ if not train_jsonl.exists():
     raise SystemExit(f"Train JSONL missing: {train_jsonl}")
 if torch.cuda.is_available():
     print("gpu 0:", torch.cuda.get_device_name(0))
+    free, total = torch.cuda.mem_get_info(0)
+    print("gpu free before load GB:", round(free / 1024**3, 3))
+    print("gpu total GB:", round(total / 1024**3, 3))
     print("gpu memory allocated before load GB:", round(torch.cuda.memory_allocated(0) / 1024**3, 3))
     print("gpu memory reserved before load GB:", round(torch.cuda.memory_reserved(0) / 1024**3, 3))
 else:
