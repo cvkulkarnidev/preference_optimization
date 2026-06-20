@@ -26,11 +26,11 @@ OUTPUT_DIR="./outputs/unsloth_grpo_genui"
 VALIDATION_SPLIT=0.05
 SEED=42
 
-# Long-output GenUI config.
-# Keep prompt moderate; output is large JSON/IR.
+# Safer long-output GenUI config.
+# Keep prompt moderate; output JSON/IR is large, but 2048 is safer than 8192.
 MAX_PROMPT_LENGTH=512
-MAX_COMPLETION_LENGTH=8192
-MAX_SEQ_LENGTH=8704
+MAX_COMPLETION_LENGTH=2048
+MAX_SEQ_LENGTH=2560
 
 # GRPO minimum valid setting.
 NUM_GENERATIONS=2
