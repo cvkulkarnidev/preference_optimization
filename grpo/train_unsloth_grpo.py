@@ -359,9 +359,14 @@ def build_model_and_tokenizer(cfg: UnslothGRPOConfig):
         max_seq_length=cfg.max_seq_length,
         load_in_4bit=cfg.load_in_4bit,
         dtype=dtype,
-        fast_inference=cfg.fast_inference,
-        gpu_memory_utilization=cfg.gpu_memory_utilization,
     )
+
+    if cfg.fast_inference:
+        kwargs["fast_inference"] = True
+        kwargs["gpu_memory_utilization"] = cfg.gpu_memory_utilization
+        print("[model] fast_inference enabled; passing vLLM kwargs.")
+    else:
+        print("[model] fast_inference disabled; not passing vLLM kwargs.")
 
     supported = set(inspect.signature(FastLanguageModel.from_pretrained).parameters)
     if "local_files_only" in supported:
