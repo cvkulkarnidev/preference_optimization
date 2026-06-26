@@ -217,12 +217,10 @@ def length_sanity_reward(prompts: List[str], completions: List[Any], genui_json:
     return rewards
 
 
+# Conservative active rewards only.
+# The richer reference/schema rewards above are kept for later experiments, but they
+# are disabled by default because they made outputs drift/turn odd in early GRPO.
 REWARD_FUNCS = [
     valid_json_reward,
     main_stack_first_key_reward,
-    no_markdown_or_prose_reward,
-    widget_type_match_reward,
-    schema_key_overlap_reward,
-    reference_similarity_reward,
-    length_sanity_reward,
 ]
