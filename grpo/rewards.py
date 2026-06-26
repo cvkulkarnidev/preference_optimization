@@ -94,6 +94,32 @@ def valid_json_reward(prompts: List[str], completions: List[Any], **kwargs: Any)
     return rewards
 
 
+def main_stack_first_key_reward(prompts: List[str], completions: List[Any], **kwargs: Any) -> List[float]:
+    """Small structural reward: root object should start with main_stack.
+
+    Keep this reward mild. If it is too strong, the model can over-optimize the
+    root shape and produce odd content inside the JSON.
+    """
+    rewards: List[float] = []
+    for completion in completions:
+        text = _completion_to_text(completion)
+        obj, ok = _parse_json(text)
+
+        if not ok or not isinstance(obj, dict) or not obj:
+            rewards.append(0.0)
+            continue
+
+        first_key = next(iter(obj.keys()))
+        if first_key == "main_stack":
+            rewards.append(0.5)
+        elif "main_stack" in obj:
+            rewards.append(0.1)
+        else:
+            rewards.append(-0.25)
+
+    return rewards
+
+
 def no_markdown_or_prose_reward(prompts: List[str], completions: List[Any], **kwargs: Any) -> List[float]:
     rewards: List[float] = []
     for completion in completions:
@@ -193,6 +219,7 @@ def length_sanity_reward(prompts: List[str], completions: List[Any], genui_json:
 
 REWARD_FUNCS = [
     valid_json_reward,
+    main_stack_first_key_reward,
     no_markdown_or_prose_reward,
     widget_type_match_reward,
     schema_key_overlap_reward,
